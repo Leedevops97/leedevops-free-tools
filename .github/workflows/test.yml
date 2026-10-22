@@ -1,0 +1,18 @@
+name: Linux compatibility
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax and behavioral regression tests
+        run: |
+          sh -n tools/server-lens/server-lens
+          bash -n tools/server-lens/server-lens
+          python3 -m unittest discover -s tests -v
+      - name: BusyBox ash and awk without extra packages
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges -v "$PWD:/src:ro" busybox:1.37 sh /src/tools/server-lens/server-lens --json --redact > /tmp/lens-busybox.json
+          python3 -c 'import json; d=json.load(open("/tmp/lens-busybox.json")); assert d["version"] == "1.0.0" and d["memory"]["total_kib"] > 0'

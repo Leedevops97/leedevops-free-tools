@@ -1,0 +1,256 @@
+#!/bin/sh
+# Server Lens 1.0.0 | Copyright 2026 Leedevops | SPDX-License-Identifier: MIT
+# Read-only Linux snapshot. No network requests, installers, agents or daemons.
+VERSION=1.0.0
+LC_ALL=C; export LC_ALL
+FORMAT=dashboard WATCH=0 INTERVAL=5 COLOR=auto REDACT=0 LIMIT=8
+PROC_ROOT=${SERVER_LENS_PROC_ROOT:-/proc}
+CGROUP_ROOT=${SERVER_LENS_CGROUP_ROOT:-/sys/fs/cgroup}
+LOG_ROOT=${SERVER_LENS_LOG_ROOT:-/var/log}
+usage() {
+    cat <<'HELP'
+Server Lens - a small, read-only Linux health dashboard
+Usage: sh server-lens [options]
+  --watch             Refresh until Ctrl+C (TTY required)
+  --interval SECONDS  Refresh pause, 2..3600 (default: 5)
+  --json              Print one structured JSON report
+  --plain             Disable terminal colors and redraw control codes
+  --no-color          Disable terminal colors
+  --redact            Hide hostname, login entries and filesystem paths
+  --logins NUMBER     Recent login entries, 1..50 (default: 8)
+  --version           Show version
+  --help              Show this help
+Needs: Linux, /bin/sh, awk and ordinary core utilities. Root is optional.
+This tool never changes system settings or sends data to a remote service.
+HELP
+}
+die() { printf 'server-lens: %s\n' "$*" >&2; exit 2; }
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --help|-h) usage; exit 0;;
+        --version) printf '%s\n' "$VERSION"; exit 0;;
+        --json) FORMAT=json;;
+        --watch) WATCH=1;;
+        --plain|--no-color) COLOR=never;;
+        --redact) REDACT=1;;
+        --interval|--logins)
+            option=$1; shift
+            [ "$#" -gt 0 ] || die "Missing value for $option"
+            case "$1" in ''|*[!0-9]*|??????????*) die "Invalid value for $option";; esac
+            # Decimal conversion avoids shell-dependent octal interpretation.
+            value=$(awk -v n="$1" 'BEGIN{printf "%d",n+0}')
+            if [ "$option" = --interval ]; then
+                [ "$value" -ge 2 ] && [ "$value" -le 3600 ] || die 'Interval must be 2..3600'
+                INTERVAL=$value
+            else
+                [ "$value" -ge 1 ] && [ "$value" -le 50 ] || die 'Logins must be 1..50'
+                LIMIT=$value
+            fi;;
+        *) die "Unknown option: $1";;
+    esac
+    shift
+done
+command -v awk >/dev/null 2>&1 || die 'awk is required (GNU awk, mawk or BusyBox awk)'
+[ "$(uname -s 2>/dev/null)" = Linux ] || die 'This release supports Linux only'
+[ -r "$PROC_ROOT/meminfo" ] || die 'Linux procfs is unavailable; mount /proc first'
+if [ "$WATCH" = 1 ]; then
+    [ "$FORMAT" != json ] || die '--watch and --json cannot be combined'
+    [ -t 1 ] || die '--watch requires a terminal; use a single snapshot when piping'
+fi
+USE_COLOR=0
+if [ -t 1 ] && [ "$COLOR" = auto ] && [ "${TERM:-dumb}" != dumb ] && [ -z "${NO_COLOR+x}" ]; then USE_COLOR=1; fi
+WIDTH=${COLUMNS:-80}
+case "$WIDTH" in ''|*[!0-9]*) WIDTH=80;; esac
+[ "$WIDTH" -ge 40 ] 2>/dev/null || WIDTH=40
+[ "$WIDTH" -le 120 ] 2>/dev/null || WIDTH=120
+have() { command -v "$1" >/dev/null 2>&1; }
+bounded() {
+    if have timeout; then timeout 4 "$@" 2>/dev/null; else "$@" 2>/dev/null; fi
+}
+# Every external text value is flattened before entering the record stream.
+emit() { printf '%s\t' "$1"; printf '%s\n' "$2" | awk '{gsub(/[[:cntrl:]]/," ");if(NR>1)printf " ";printf "%s",$0}END{print ""}'; }
+cpu_sample() {
+    awk '$1=="cpu"{t=0;for(i=2;i<=9&&i<=NF;i++)t+=$i;print t,$5+$6;exit}' "$PROC_ROOT/stat" 2>/dev/null
+}
+time_info() {
+    # Prefer an actual selected source, not merely an enabled NTP service.
+    if have chronyc; then
+        track=$(bounded chronyc -n tracking)
+        leap=$(printf '%s\n' "$track" | awk -F: '/^Leap status/{gsub(/^ +| +$/,"",$2);print $2}')
+        ref=$(printf '%s\n' "$track" | awk -F: '/^Reference ID/{gsub(/^ +| +$/,"",$2);print $2}')
+        if [ -n "$leap" ]; then
+            emit time_source chrony; emit time_detail "$ref; $leap"
+            case "$leap:$ref" in
+                'Not synchronised:'*) emit time_status unsynchronized;;
+                *:7F7F0101*|*:127.127.1.1*) emit time_status local-reference;;
+                Normal:*|'Insert second:'*|'Delete second:'*) emit time_status synchronized;;
+                *) emit time_status unknown;;
+            esac
+            return
+        fi
+    fi
+    if have ntpq; then
+        peers=$(bounded ntpq -pn)
+        chosen=$(printf '%s\n' "$peers" | awk '/^\*/{print;exit}')
+        if [ -n "$chosen" ]; then
+            emit time_source ntpd; emit time_detail "$chosen"
+            case "$chosen" in '*127.127.'*|*'.LOCL.'*) emit time_status local-reference;; *) emit time_status synchronized;; esac
+            return
+        fi
+    fi
+    if have timedatectl; then
+        td=$(bounded timedatectl show -p NTPSynchronized -p NTP -p Timezone)
+        sync=$(printf '%s\n' "$td" | awk -F= '$1=="NTPSynchronized"{print $2}')
+        if [ -n "$sync" ]; then
+            emit time_source systemd; emit time_detail "$td"
+            case "$sync" in yes) emit time_status synchronized;; no) emit time_status unsynchronized;; *) emit time_status unknown;; esac
+            return
+        fi
+    fi
+    emit time_status unknown; emit time_source unavailable
+    emit time_detail 'No readable synchronization status. No external time comparison was made.'
+}
+login_info() {
+    log=''; method=unavailable
+    if have last; then
+        # GNU/util-linux, wtmpdb last compatibility, then minimal BusyBox last.
+        log=$(bounded last -n "$LIMIT" -w -F)
+        [ -n "$log" ] || log=$(bounded last -n "$LIMIT")
+        method=last
+    elif have wtmpdb; then
+        log=$(bounded wtmpdb last -n "$LIMIT"); method=wtmpdb
+    fi
+    entries=$(printf '%s\n' "$log" | awk 'NF && $1!="reboot" && $1!="shutdown" && $1!="wtmp" && $1!="btmp" && $1!="runlevel" && $1!="wtmpdb"{print}')
+    if [ -z "$entries" ] && have journalctl; then
+        entries=$(bounded journalctl --no-pager -q -o short-iso -n 200 SYSLOG_IDENTIFIER=sshd + SYSLOG_IDENTIFIER=sshd-session | awk '/Accepted (password|publickey|keyboard-interactive|hostbased|gssapi)/{rows[++n]=$0}END{start=n-limit+1;if(start<1)start=1;for(i=n;i>=start;i--)print rows[i]}' limit="$LIMIT")
+        [ -z "$entries" ] || method=sshd-journal
+    fi
+    if [ -z "$entries" ]; then
+        for file in "$LOG_ROOT/auth.log" "$LOG_ROOT/secure"; do
+            if [ -r "$file" ]; then
+                entries=$(tail -n 500 "$file" 2>/dev/null | awk '/Accepted (password|publickey|keyboard-interactive|hostbased|gssapi)/{rows[++n]=$0}END{start=n-limit+1;if(start<1)start=1;for(i=n;i>=start;i--)print rows[i]}' limit="$LIMIT")
+                [ -z "$entries" ] || { method=sshd-log; break; }
+            fi
+        done
+    fi
+    emit login_source "$method"
+    if [ -n "$entries" ]; then
+        emit login_status available
+        printf '%s\n' "$entries" | awk -v limit="$LIMIT" 'NF&&n++<limit{gsub(/[[:cntrl:]]/," ");print "login\t"$0}'
+    else
+        emit login_status unavailable
+    fi
+    if have who; then
+        bounded who | awk -v limit="$LIMIT" 'NF&&n++<limit{gsub(/[[:cntrl:]]/," ");print "session\t"$0}'
+    fi
+}
+collect() {
+    emit version "$VERSION"; emit generated_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    emit local_time "$(date '+%Y-%m-%d %H:%M:%S %Z (%z)')"
+    emit hostname "$(uname -n)"; emit kernel "$(uname -r)"; emit architecture "$(uname -m)"
+    os=$(awk -F= '$1=="PRETTY_NAME"{sub(/^[^=]*=/,"");gsub(/^"|"$/ ,"");print;exit}' /etc/os-release 2>/dev/null)
+    [ -n "$os" ] || os=$(uname -s)
+    emit os "$os"
+    scope=host-or-vm
+    if [ -f /.dockerenv ] || [ -f /run/.containerenv ] || [ -n "${container:-}" ]; then scope=container; fi
+    emit scope "$scope"
+    source=live
+    if [ "$PROC_ROOT" != /proc ] || [ "$CGROUP_ROOT" != /sys/fs/cgroup ] || [ "$LOG_ROOT" != /var/log ]; then source=fixture; fi
+    emit data_source "$source"
+    awk '{print "uptime_seconds\t"int($1)}' "$PROC_ROOT/uptime" 2>/dev/null
+    awk '{print "load1\t"$1;print "load5\t"$2;print "load15\t"$3}' "$PROC_ROOT/loadavg" 2>/dev/null
+    awk -F: '/^processor[ \t]*:/{n++}/^(model name|Hardware)[ \t]*:/&&!m{m=$2;sub(/^ +/,"",m);gsub(/[[:cntrl:]]/," ",m)}END{if(n)print "cpu_cores\t"n;if(m)print "cpu_model\t"m}' "$PROC_ROOT/cpuinfo" 2>/dev/null
+    first=$(cpu_sample); sleep 1; second=$(cpu_sample)
+    awk -v a="$first" -v b="$second" 'BEGIN{split(a,x," ");split(b,y," ");t=y[1]-x[1];idle=y[2]-x[2];if(a!=""&&b!=""&&t>0){if(idle<0)idle=0;p=100*(t-idle)/t;if(p<0)p=0;if(p>100)p=100;printf "cpu_percent\t%.1f\n",p}}'
+    awk -F: '{v[$1]=$2+0}END{t=v["MemTotal"];has_available=("MemAvailable" in v);a=v["MemAvailable"];method="MemAvailable";if(!has_available){a=v["MemFree"]+v["Buffers"]+v["Cached"]+v["SReclaimable"]-v["Shmem"];method="estimated"}if(a<0)a=0;if(a>t)a=t;if(t>0){printf "memory_total_kib\t%.0f\nmemory_available_kib\t%.0f\nmemory_used_kib\t%.0f\nmemory_percent\t%.1f\n",t,a,t-a,100*(t-a)/t;print "memory_method\t"method}printf "swap_total_kib\t%.0f\nswap_used_kib\t%.0f\n",v["SwapTotal"],v["SwapTotal"]-v["SwapFree"]}' "$PROC_ROOT/meminfo"
+    # Container limits are separate from kernel-visible host metrics.
+    for cg in "$CGROUP_ROOT" "$CGROUP_ROOT/memory"; do
+        for f in memory.max memory.limit_in_bytes; do
+            [ -r "$cg/$f" ] || continue
+            awk '$1~/^[0-9]+$/&&$1>0&&$1<9e18{printf "cgroup_memory_limit_kib\t%.0f\n",$1/1024}' "$cg/$f"
+        done
+        for f in memory.current memory.usage_in_bytes; do
+            [ -r "$cg/$f" ] || continue
+            awk '$1~/^[0-9]+$/{printf "cgroup_memory_used_kib\t%.0f\n",$1/1024}' "$cg/$f"
+        done
+    done
+    if [ -r "$CGROUP_ROOT/cpu.max" ]; then awk '$1~/^[0-9]+$/&&$2>0{printf "cgroup_cpu_quota_cores\t%.2f\n",$1/$2}' "$CGROUP_ROOT/cpu.max"; fi
+    if have df; then
+        bounded df -Pk | awk 'NR>1&&NF>=6&&$2~/^[0-9]+$/&&$2>0&&$1!~/^(tmpfs|devtmpfs|udev|shm)$/&&n++<20{m=$6;for(i=7;i<=NF;i++)m=m" "$i;gsub(/[[:cntrl:]]/," ",m);gsub(/%/,"",$5);if($5~/^[0-9]+$/)print "disk\t"$1"\t"$2"\t"$3"\t"$4"\t"$5"\t"m}'
+    fi
+    time_info; login_info
+}
+render() {
+awk -F '\t' -v mode="$FORMAT" -v width="$WIDTH" -v color="$USE_COLOR" -v redact="$REDACT" '
+function clean(s){gsub(/[[:cntrl:]]/," ",s);return s}
+function quote(s, t,i,c){t="\"";for(i=1;i<=length(s);i++){c=substr(s,i,1);if(c=="\\")t=t"\\\\";else if(c=="\"")t=t"\\\"";else t=t c}return t"\""}
+function num(k){return k in v && v[k]~/^[0-9]+([.][0-9]+)?$/ ? v[k] : "null"}
+function str(k){return quote(v[k])}
+function bytes(n){if(n==""||n=="null")return "unknown";if(n>=1048576)return sprintf("%.1f GiB",n/1048576);if(n>=1024)return sprintf("%.1f MiB",n/1024);return sprintf("%.0f KiB",n)}
+function tone(s,c){return color?esc"["c"m"s esc"[0m":s}
+function short(s,n){return length(s)>n?substr(s,1,n-3)"...":s}
+function line(s){print "  "short(clean(s),width-4)}
+function wrap(s){s=clean(s);while(length(s)>width-4){print "  "substr(s,1,width-4);s=substr(s,width-3)}print "  "s}
+function heading(s){print "";print "  "tone(s,"1;36");line(rule)}
+function row(k,s){line(sprintf("%-14s %s",k,s))}
+function bar(p, tag, i,n,s,piece){n=int((width-30)/2);if(n<6)n=6;if(n>24)n=24;s="[";for(i=0;i<n;i++){piece=i<n*p/100?"=":".";s=s piece}s=s"]";return sprintf("%5.1f%% %s %s",p,s,tag)}
+function level(p){return p>=95?"HIGH":(p>=80?"CHECK":"OK")}
+BEGIN{esc=sprintf("%c",27);for(i=0;i<width-4;i++)rule=rule"-"}
+$1=="disk"{d++;for(i=2;i<=7;i++)disk[d,i]=clean($i);next}
+$1=="login"{login[++l]=clean($2);next}
+$1=="session"{session[++u]=clean($2);next}
+NF>=2{v[$1]=clean($2)}
+END{
+ if(redact){v["hostname"]="[redacted]";for(i=1;i<=l;i++)login[i]="[redacted login entry]";for(i=1;i<=u;i++)session[i]="[redacted session]";for(i=1;i<=d;i++){disk[i,2]="[filesystem]";disk[i,7]="[mount]"}}
+ if(mode=="json"){
+  print "{";print "  \"schema_version\": 1,";print "  \"tool\": \"server-lens\",";print "  \"version\": "str("version")",";
+  print "  \"generated_at\": "str("generated_at")",";print "  \"data_source\": "str("data_source")",";
+  print "  \"host\": {\"hostname\": "str("hostname")", \"os\": "str("os")", \"kernel\": "str("kernel")", \"architecture\": "str("architecture")", \"scope\": "str("scope")", \"uptime_seconds\": "num("uptime_seconds")"},";
+  print "  \"cpu\": {\"cores\": "num("cpu_cores")", \"model\": "str("cpu_model")", \"percent\": "num("cpu_percent")", \"sample_seconds\": 1, \"load_1\": "num("load1")", \"load_5\": "num("load5")", \"load_15\": "num("load15")", \"cgroup_quota_cores\": "num("cgroup_cpu_quota_cores")"},";
+  printf "  \"memory\": {";split("total available used percent",keys," ");for(i=1;i<=4;i++){k=keys[i];key="memory_" k;if(k!="percent")key=key "_kib";printf("%s\"%s\": %s",(i>1?", ":""),(k=="percent"?k:(k "_kib")),num(key))}
+  print ", \"method\": "str("memory_method")", \"swap_total_kib\": "num("swap_total_kib")", \"swap_used_kib\": "num("swap_used_kib")", \"cgroup_limit_kib\": "num("cgroup_memory_limit_kib")", \"cgroup_used_kib\": "num("cgroup_memory_used_kib")"},";
+  print "  \"disks\": [";for(i=1;i<=d;i++)print "    {\"filesystem\": "quote(disk[i,2])", \"mount\": "quote(disk[i,7])", \"total_kib\": "disk[i,3]", \"used_kib\": "disk[i,4]", \"available_kib\": "disk[i,5]", \"percent\": "disk[i,6]"}"(i<d?",":"");print "  ],";
+  print "  \"time\": {\"local\": "str("local_time")", \"status\": "str("time_status")", \"source\": "str("time_source")", \"detail\": "str("time_detail")"},";
+  print "  \"logins\": {\"status\": "str("login_status")", \"source\": "str("login_source")", \"entries\": [";for(i=1;i<=l;i++)print "    "quote(login[i])(i<l?",":"");print "  ], \"current_utmp_sessions\": [";for(i=1;i<=u;i++)print "    "quote(session[i])(i<u?",":"");print "  ]},";
+  print "  \"redacted\": "(redact?"true":"false")",";print "  \"notes\": [\"Read-only local snapshot; no independent Internet clock measurement.\", \"Login history can be incomplete, rotated, missing or permission-restricted.\", \"CPU and memory from procfs are kernel-visible; cgroup limits are separate.\"]";print "}";exit
+ }
+ print "";print "  "tone("LEEDEVOPS / SERVER LENS","1;36")"  v"v["version"]
+ line("A little clarity for your Linux server.");line(rule)
+ row("Host",v["hostname"]"  /  "v["scope"]);row("System",v["os"]);row("Kernel",v["kernel"]" / "v["architecture"])
+ seconds=v["uptime_seconds"]+0;row("Uptime",sprintf("%dd %02dh %02dm",seconds/86400,(seconds%86400)/3600,(seconds%3600)/60));row("Snapshot",v["generated_at"])
+ if(v["data_source"]!="live")row("DATA SOURCE","FIXTURE / overridden procfs")
+ heading("01  RESOURCES")
+ if("cpu_percent" in v)row("CPU (kernel)",bar(v["cpu_percent"],level(v["cpu_percent"])));else row("CPU (kernel)","unknown / insufficient counter sample")
+ row("Processors",v["cpu_cores"]" logical / "v["cpu_model"]);row("Load 1/5/15",v["load1"]" / "v["load5"]" / "v["load15"])
+ if("memory_percent" in v){row("Memory",bar(v["memory_percent"],level(v["memory_percent"])));row("Used / total",bytes(v["memory_used_kib"])" / "bytes(v["memory_total_kib"]));row("Available",bytes(v["memory_available_kib"])" / "v["memory_method"])}else row("Memory","unknown")
+ row("Swap",bytes(v["swap_used_kib"])" / "bytes(v["swap_total_kib"]))
+ if("cgroup_memory_limit_kib" in v)row("Cgroup memory",bytes(v["cgroup_memory_used_kib"])" / "bytes(v["cgroup_memory_limit_kib"]))
+ if("cgroup_cpu_quota_cores" in v)row("Cgroup quota",v["cgroup_cpu_quota_cores"]" CPU cores")
+ heading("02  FILESYSTEMS / up to 20 mounts")
+ if(!d)line("Unknown / df unavailable or not readable.")
+ for(i=1;i<=d;i++){row(short(disk[i,7],13),bar(disk[i,6],level(disk[i,6])));row("Free / total",bytes(disk[i,5])" / "bytes(disk[i,3]))}
+ heading("03  CLOCK / configured synchronization")
+ row("Local time",v["local_time"]);row("Status",v["time_status"]" / "v["time_source"]);row("Evidence",v["time_detail"])
+ line("No independent Internet clock test is performed.")
+ heading("04  RECENT LOGINS / "v["login_source"])
+ if(!l){line("Unknown / no readable recent records. This does not mean no logins.");line("Try sudo for protected logs; no component is auto-installed.")}
+ for(i=1;i<=l;i++)wrap(login[i])
+ if(l)line("Newest first. Journal/log fallback covers successful SSH logins only.")
+ heading("05  CURRENT UTMP SESSIONS")
+ if(!u)line("No readable utmp entries; SSH without a TTY may not appear.")
+ for(i=1;i<=u;i++)wrap(session[i])
+ print "";line(rule);line("READ ONLY / NO TELEMETRY / MIT LICENSE");line("History may be incomplete. Container metrics may describe the host.");print ""
+}'
+}
+restore() { [ "$USE_COLOR" = 0 ] || printf '\033[?25h\033[0m'; }
+trap 'restore; exit 130' INT
+trap 'restore; exit 143' TERM
+trap restore EXIT
+while :; do
+    if [ "$WATCH" = 1 ] && [ "$USE_COLOR" = 1 ]; then printf '\033[?25l\033[H\033[2J'; fi
+    collect | render
+    result=$?
+    [ "$result" -eq 0 ] || exit "$result"
+    [ "$WATCH" = 1 ] || break
+    sleep "$INTERVAL"
+done
