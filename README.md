@@ -7,7 +7,9 @@ Website: [leeimages.com](https://www.leeimages.com/) · [中文说明](docs/READ
 ## Server Lens 1.0.0
 
 A read-only Linux health dashboard in a single POSIX shell script. No Python,
-Node, web server, root requirement, background agent or network requests.
+Node, web server, root requirement, background agent or outbound Internet requests.
+Optional time-query utilities may communicate with a time daemon on the same
+machine using a local socket or loopback connection.
 
 - Recent login records and their times; current utmp sessions.
 - A one-second CPU usage sample, logical processors, model and load averages.
