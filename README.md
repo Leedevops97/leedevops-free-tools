@@ -12,6 +12,7 @@ interface, 30-second collection and 48-hour local history. Private live access
 uses an SSH tunnel; the public demo is clearly simulated.
 
 [Web edition documentation](tools/server-lens-web/README.md) ·
+[中文用户说明书](tools/server-lens-web/USER-GUIDE.zh-CN.md) ·
 [Product and demo](https://www.leeimages.com/server-lens-web/)
 
 The web edition installs systemd services and official upstream components;

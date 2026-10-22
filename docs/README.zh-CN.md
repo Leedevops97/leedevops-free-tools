@@ -1,5 +1,11 @@
 # Leedevops 免费开源工具
 
+网页版 **Server Lens Web 1.1.0** 已提供：使用 Prometheus + Node Exporter，
+通过浏览器查看 CPU、内存、根磁盘、运行时长和趋势。
+请阅读[网页版用户说明书](../tools/server-lens-web/USER-GUIDE.zh-CN.md)，
+其中包含 SSH 隧道访问、初次安装、按钮说明与故障排查。网页版需要安装常驻服务；
+下面的“无需安装”说明仅适用于独立终端工具。
+
 第一款工具 **Server Lens 1.0.0**：单文件 Linux 服务器状态检查工具，MIT 许可，
 永久免费获取，无需注册或付款。终端界面默认英文，使用 ASCII 字符兼容普通 SSH 终端。
 

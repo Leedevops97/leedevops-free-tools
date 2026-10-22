@@ -1,5 +1,7 @@
 # Server Lens Web 1.1.0
 
+[中文用户说明书：访问、安装、指标与常见故障](USER-GUIDE.zh-CN.md)
+
 A small browser dashboard backed by **Prometheus + Node Exporter**. Free / MIT
 for the Server Lens code. Upstream components retain their Apache-2.0 licenses.
 The original standalone Server Lens CLI remains available separately.
@@ -57,7 +59,7 @@ values when Prometheus is unavailable.
   least two scrapes. Empty/stale/failed probes show unknown, never fabricated 0%.
 - Memory uses MemAvailable (Linux 3.14+). Disk is the root filesystem and uses
   available-to-applications space; reserved blocks count as unavailable.
-- If the web process is paused, the last values and their timestamp remain;
+- If browser refreshing is paused, the last values and their timestamp remain;
   resume/manual refresh requests a new snapshot. Charts reflect sampled data,
   not continuous measurement. Missing history is not interpolated across gaps.
 
