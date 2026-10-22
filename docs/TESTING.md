@@ -43,6 +43,21 @@ measurement process is outside the tool. No daemon remains after exit.
 
 No unredacted server reports or real login records are included in this repo.
 
+## Web edition 1.1.0
+
+The separate opt-in Prometheus web edition has 16 additional gateway tests:
+missing/stale samples, failed collectors and upstream outages, nonfinite values,
+cache reuse, query/range allowlists, Host validation and response headers.
+The live deployment was exercised on Ubuntu 26.04 / x86_64 with the pinned
+Prometheus and Node Exporter versions. All three services bind to loopback.
+ARM64 release checksums are pinned, but ARM64 and RHEL-family deployment have
+not been exercised. See [web documentation](../tools/server-lens-web/README.md).
+
+Browser checks cover English/Chinese, metric and time-range switching,
+pause/resume/manual refresh, mobile/tablet layouts and the explicitly simulated
+public demo. The demo must not request the live metrics API. No actual server
+telemetry or production screenshots are published in this repository.
+
 ## Technical references
 
 - [Linux procfs](https://www.kernel.org/doc/html/latest/filesystems/proc.html)

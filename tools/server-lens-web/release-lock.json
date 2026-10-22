@@ -1,0 +1,42 @@
+{
+  "prometheus": {
+    "version": "3.15.1",
+    "assets": {
+      "amd64": {
+        "name": "prometheus-3.15.1.linux-amd64.tar.gz",
+        "size": 111690181,
+        "digest": "sha256:6a726885328ad9efebbf36e876ce2fb6225468a71fd1e7ce3ba666d5f4d97a84",
+        "browser_download_url": "https://github.com/prometheus/prometheus/releases/download/v3.15.1/prometheus-3.15.1.linux-amd64.tar.gz"
+      },
+      "arm64": {
+        "name": "prometheus-3.15.1.linux-arm64.tar.gz",
+        "size": 102008498,
+        "digest": "sha256:ceb6d21493c37ca0b4513b147642797c68cf39a0f50a444d50e1e80c74f21b26",
+        "browser_download_url": "https://github.com/prometheus/prometheus/releases/download/v3.15.1/prometheus-3.15.1.linux-arm64.tar.gz"
+      }
+    },
+    "binary_sha256": {
+      "amd64": "bbd11cb0084f0ed962ec32163ee22622ff920990af29b5de802e44c570187989"
+    }
+  },
+  "node_exporter": {
+    "version": "1.12.1",
+    "assets": {
+      "amd64": {
+        "name": "node_exporter-1.12.1.linux-amd64.tar.gz",
+        "size": 12168577,
+        "digest": "sha256:b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63",
+        "browser_download_url": "https://github.com/prometheus/node_exporter/releases/download/v1.12.1/node_exporter-1.12.1.linux-amd64.tar.gz"
+      },
+      "arm64": {
+        "name": "node_exporter-1.12.1.linux-arm64.tar.gz",
+        "size": 11128680,
+        "digest": "sha256:ad35b605f9954b9f1ffddf5ba054bdc5a98d790b9eae5291e1eeb83f1ecbd0e7",
+        "browser_download_url": "https://github.com/prometheus/node_exporter/releases/download/v1.12.1/node_exporter-1.12.1.linux-arm64.tar.gz"
+      }
+    },
+    "binary_sha256": {
+      "amd64": "1108f7453ecfe4a72f131c73b69537c171840ad4f1713a2402328ad56cf12e09"
+    }
+  }
+}

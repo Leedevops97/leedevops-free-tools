@@ -1,0 +1,14 @@
+global:
+  scrape_interval: 30s
+  scrape_timeout: 5s
+  evaluation_interval: 1m
+scrape_configs:
+  - job_name: server_lens
+    static_configs:
+      - targets: ['127.0.0.1:19100']
+    sample_limit: 4096
+    body_size_limit: 4MB
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        action: keep
+        regex: 'node_cpu_seconds_total|node_memory_(MemTotal|MemAvailable|MemFree|Buffers|Cached|SReclaimable|Shmem)_bytes|node_filesystem_(avail|size|free)_bytes|node_boot_time_seconds|node_time_seconds|node_load1|node_scrape_collector_success'

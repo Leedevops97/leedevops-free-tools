@@ -4,6 +4,19 @@ Small, understandable, free and open-source tools for people who run Linux.
 
 Website: [leeimages.com](https://www.leeimages.com/) · [中文说明](docs/README.zh-CN.md) · [MIT license](LICENSE)
 
+## Server Lens Web 1.1.0
+
+A lightweight Prometheus + Node Exporter dashboard with four resource cards
+and one chart. CPU, memory, root-disk capacity and uptime, with English/Chinese
+interface, 30-second collection and 48-hour local history. Private live access
+uses an SSH tunnel; the public demo is clearly simulated.
+
+[Web edition documentation](tools/server-lens-web/README.md) ·
+[Product and demo](https://www.leeimages.com/server-lens-web/)
+
+The web edition installs systemd services and official upstream components;
+its requirements and resource limits differ from the standalone CLI below.
+
 ## Server Lens 1.0.0
 
 A read-only Linux health dashboard in a single POSIX shell script. No Python,
